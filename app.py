@@ -6,7 +6,6 @@ import cv2 as cv
 import torch
 import torch.nn as nn
 import streamlit as st
-from PIL import Image
 from datetime import datetime
 
 st.set_page_config(
@@ -97,7 +96,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
 [data-theme="dark"] .main,
 [data-theme="dark"] .block-container { background-color: var(--page-bg) !important; color: var(--txt-b) !important; }
 
-/* ─── BLOCK CONTAINER: responsive padding ─── */
+/* ─── BLOCK CONTAINER ─── */
 .block-container {
     padding: 1rem 0.75rem !important;
     max-width: 1360px !important;
@@ -274,7 +273,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
 .empty-state-title { font-size: 0.78rem; font-weight: 600; color: var(--txt-m); letter-spacing: 0.5px; margin-bottom: 0.3rem; }
 .empty-state-sub { font-size: 0.7rem; color: var(--txt-lo); line-height: 1.5; }
 
-/* ─── RESPONSIVE: stack Streamlit columns on small screens ─── */
+/* ─── RESPONSIVE OVERRIDES ─── */
 @media (max-width: 640px) {
     [data-testid="stHorizontalBlock"] {
         flex-direction: column !important;
@@ -359,14 +358,6 @@ hr { border-color: var(--border) !important; margin: 1rem 0 !important; }
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 99px; }
-
-[data-theme="light"] .stTabs [data-baseweb="tab-list"] { background: var(--card-bg2); }
-[data-theme="light"] .stTabs [aria-selected="true"] { background: var(--card-bg) !important; }
-[data-theme="light"] div[data-testid="stFileUploader"] { background: var(--card-bg); }
-[data-theme="light"] [data-testid="stVerticalBlock"],
-[data-theme="light"] [data-testid="stHorizontalBlock"] { background: transparent !important; }
-[data-theme="dark"] [data-testid="stVerticalBlock"],
-[data-theme="dark"] [data-testid="stHorizontalBlock"] { background: transparent !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -374,16 +365,24 @@ hr { border-color: var(--border) !important; margin: 1rem 0 !important; }
 IMG_SIZE   = (64, 64)
 INPUT_SIZE = 64 * 64 * 3
 MODEL_PATH = "best_ann_model.pth"
-THRESHOLD  = 65
+THRESHOLD  = 65.0
 device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ── Model ──────────────────────────────────────────────────────────
-class my_ANN(nn.Module):
+# ── Correct Architecture Matching Your best_ann_model.pth ───────────
+class SavedNeuralNetwork(nn.Module):
     def __init__(self, input_size):
         super().__init__()
-        self.fc1  = nn.Linear(input_size, 512); self.relu1 = nn.ReLU(); self.drop1 = nn.Dropout(0.3)
-        self.fc2  = nn.Linear(512, 256);        self.relu2 = nn.ReLU(); self.drop2 = nn.Dropout(0.3)
-        self.fc3  = nn.Linear(256, 128);        self.relu3 = nn.ReLU()
+        self.fc1  = nn.Linear(input_size, 512)
+        self.relu1 = nn.ReLU()
+        self.drop1 = nn.Dropout(0.3)
+        
+        self.fc2  = nn.Linear(512, 256)
+        self.relu2 = nn.ReLU()
+        self.drop2 = nn.Dropout(0.3)
+        
+        self.fc3  = nn.Linear(256, 128)
+        self.relu3 = nn.ReLU()
+        
         self.fc4  = nn.Linear(128, 2)
 
     def forward(self, x):
@@ -394,15 +393,17 @@ class my_ANN(nn.Module):
 
 @st.cache_resource
 def load_model():
-    m = my_ANN(INPUT_SIZE).to(device)
+    m = SavedNeuralNetwork(INPUT_SIZE).to(device)
     m.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True))
     m.eval()
     return m
 
-def preprocess(pil_img):
-    img = np.array(pil_img.convert("RGB"))
-    img = cv.resize(img, IMG_SIZE) / 255.0
-    return torch.tensor(img.reshape(1, -1), dtype=torch.float32).to(device)
+def preprocess(cv2_img):
+    # Process matrix through OpenCV functions directly
+    img_rgb = cv.cvtColor(cv2_img, cv.COLOR_BGR2RGB)
+    img_resized = cv.resize(img_rgb, IMG_SIZE)
+    img_array = img_resized / 255.0
+    return torch.tensor(img_array.reshape(1, -1), dtype=torch.float32).to(device)
 
 # ── Session state ──────────────────────────────────────────────────
 for k, v in {
@@ -413,31 +414,32 @@ for k, v in {
         st.session_state[k] = v
 
 # ── Helpers ────────────────────────────────────────────────────────
-def add_to_history(pil_img, label, dog_prob, cat_prob):
-    thumb = pil_img.copy()
-    thumb.thumbnail((160, 160))
-    buf = io.BytesIO()
-    thumb.save(buf, format="JPEG", quality=80)
+def add_to_history(cv2_img, label, dog_prob, cat_prob):
+    # Encode OpenCV image to jpeg format bytes for base64 distribution
+    _, buf = cv.imencode(".jpg", cv2_img, [int(cv.IMWRITE_JPEG_QUALITY), 80])
     st.session_state.history.insert(0, {
-        "bytes": buf.getvalue(), "label": label,
+        "bytes": buf.tobytes(), "label": label,
         "dog": dog_prob, "cat": cat_prob,
         "time": datetime.now().strftime("%H:%M"),
     })
     if len(st.session_state.history) > 30:
         st.session_state.history = st.session_state.history[:30]
 
-def run_inference(pil_img):
+def run_inference(cv2_img):
     if not os.path.exists(MODEL_PATH):
-        st.error("❌  Model file not found: `best_ann_model.pth`")
+        st.error(f"❌ Model file not found: `{MODEL_PATH}`")
         return None, None
     with st.spinner("Classifying…"):
         model  = load_model()
-        tensor = preprocess(pil_img)
+        tensor = preprocess(cv2_img)
         with torch.no_grad():
             probs = torch.softmax(model(tensor), dim=1)[0]
-    return probs[0].item() * 100, probs[1].item() * 100
+            
+    dog_pct = probs[0].item() * 100.0
+    cat_pct = probs[1].item() * 100.0
+    return dog_pct, cat_pct
 
-def show_result(pil_img, dog_prob, cat_prob, save_history=True):
+def show_result(cv2_img, dog_prob, cat_prob, save_history=True):
     top = max(dog_prob, cat_prob)
     if top < THRESHOLD:
         label, wrap, emoji, title = "unknown", "unk-wrap", "🚫", "Not Detected"
@@ -450,7 +452,7 @@ def show_result(pil_img, dog_prob, cat_prob, save_history=True):
         conf_txt = f"{cat_prob:.1f}% confidence"
 
     if save_history:
-        add_to_history(pil_img, label, dog_prob, cat_prob)
+        add_to_history(cv2_img, label, dog_prob, cat_prob)
 
     st.markdown(f"""
     <div class="result-wrap {wrap}">
@@ -533,7 +535,10 @@ with left:
             key="uploader", label_visibility="collapsed",
         )
         if uploaded is not None:
-            img = Image.open(io.BytesIO(uploaded.read())).convert("RGB")
+            # Safely transform upload byte sequences straight to OpenCV array matrices
+            file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
+            img = cv.imdecode(file_bytes, cv.IMREAD_COLOR)
+            
             if st.session_state.last_uploaded_name != uploaded.name:
                 st.session_state.upload_img         = img
                 st.session_state.last_uploaded_name = uploaded.name
@@ -544,7 +549,9 @@ with left:
             st.markdown("<hr>", unsafe_allow_html=True)
             col_img, col_res = st.columns([1, 1], gap="medium")
             with col_img:
-                st.image(st.session_state.upload_img, use_container_width=True)
+                # Convert to RGB color channel display for streamlit template execution
+                disp_rgb = cv.cvtColor(st.session_state.upload_img, cv.COLOR_BGR2RGB)
+                st.image(disp_rgb, use_container_width=True)
             with col_res:
                 clicked = st.button("🔍  Predict", key="predict_btn",
                                     type="primary", use_container_width=True)
@@ -601,14 +608,15 @@ with left:
         photo = st.camera_input("", key=f"cam_{facing_mode}",
                                 label_visibility="collapsed")
         if photo is not None:
-            st.session_state.camera_img = Image.open(
-                io.BytesIO(photo.read())).convert("RGB")
+            cam_bytes = np.asarray(bytearray(photo.read()), dtype=np.uint8)
+            st.session_state.camera_img = cv.imdecode(cam_bytes, cv.IMREAD_COLOR)
 
         if st.session_state.camera_img is not None:
             st.markdown("<hr>", unsafe_allow_html=True)
             ci, cr = st.columns([1, 1], gap="medium")
             with ci:
-                st.image(st.session_state.camera_img, use_container_width=True)
+                cam_rgb = cv.cvtColor(st.session_state.camera_img, cv.COLOR_BGR2RGB)
+                st.image(cam_rgb, use_container_width=True)
             with cr:
                 d, c = run_inference(st.session_state.camera_img)
                 if d is not None:
