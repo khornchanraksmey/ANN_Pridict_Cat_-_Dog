@@ -1,0 +1,14 @@
+IMPORTANT: You MUST do these steps:
+
+1. Close the Jupyter browser tab
+2. Go back to VS Code terminal where Jupyter is running
+3. Press Ctrl+C to stop Jupyter
+4. Run this command again:
+   jupyter notebook
+
+5. Open build_model.ipynb again
+ Restart Kernel and Clear All Output
+7. Run the optimizer cell - it will work now!
+
+The notebook FILE was updated correctly.
+Jupyter just needs to reload it fresh.
